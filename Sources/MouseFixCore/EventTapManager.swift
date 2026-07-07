@@ -69,6 +69,7 @@ public final class EventTapManager {
 
     private func handle(event: CGEvent, type: CGEventType, proxy: CGEventTapProxy) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            log("tap disabled (\(type == .tapDisabledByTimeout ? "timeout" : "user input")) — re-enabling")
             if let tap = tap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
@@ -105,7 +106,11 @@ public final class EventTapManager {
             return Unmanaged.passUnretained(event)
 
         case .otherMouseDown, .otherMouseUp:
+            let btn = Int(event.getIntegerValueField(.mouseEventButtonNumber))
+            let kind = type == .otherMouseDown ? "down" : "up"
+            log("event: btn \(btn) \(kind)")
             let consumed = buttonMapper.processButton(event: event, type: type)
+            if consumed { log("  consumed") }
             return consumed ? nil : Unmanaged.passUnretained(event)
 
         case .otherMouseDragged:

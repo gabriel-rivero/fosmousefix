@@ -35,6 +35,7 @@ final class ButtonMapper {
         let btn = Int(buttonNum)
 
         if type == .otherMouseDown {
+            log("btn \(btn) down")
             heldButtons.insert(btn)
             buttonDownTime[btn] = CFAbsoluteTimeGetCurrent()
             buttonDownPos[btn] = event.location
@@ -43,28 +44,33 @@ final class ButtonMapper {
         }
 
         if type == .otherMouseUp {
-            heldButtons.remove(btn)
             let held = CFAbsoluteTimeGetCurrent() - (buttonDownTime[btn] ?? 0)
             let hasDrag = buttonTriggerFired.contains(btn)
+            log("btn \(btn) up  held=\(String(format: "%.2f", held))s")
 
             defer {
+                heldButtons.remove(btn)
                 buttonDownTime.removeValue(forKey: btn)
                 buttonDownPos.removeValue(forKey: btn)
                 buttonTriggerFired.remove(btn)
             }
 
             if hasDrag {
+                log("  already fired drag — swallowing")
                 return true
             }
 
             if held < clickTimeThreshold, let action = action(for: btn, trigger: "click") {
+                log("  → click action")
                 executeAction(action)
                 return true
             } else if let action = action(for: btn, trigger: "hold") {
+                log("  → hold action")
                 executeAction(action)
                 return true
             }
 
+            log("  no mapping for btn \(btn) trigger=click")
             return false
         }
 

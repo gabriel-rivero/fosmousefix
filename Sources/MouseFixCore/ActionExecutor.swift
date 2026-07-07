@@ -18,36 +18,72 @@ public let systemActions: [String: (CGEventFlags, UInt16)] = [
     "close_window":       ([.maskCommand], 0x0D),
 ]
 
-private let modifierMap: [String: CGEventFlags] = [
-    "command": .maskCommand,
-    "control": .maskControl,
-    "option": .maskAlternate,
-    "shift": .maskShift,
-    "fn": .maskSecondaryFn,
+private let modifierAppleScriptMap: [String: String] = [
+    "command": "command down",
+    "control": "control down",
+    "option": "option down",
+    "shift": "shift down",
 ]
 
 func executeAction(_ action: ActionDef) {
     switch action {
     case .system(let name):
-        if let (modifiers, keyCode) = systemActions[name] {
-            postKeyCombo(modifiers: modifiers, keyCode: keyCode)
+        log("action: \(name)")
+        if let (_, keyCode) = systemActions[name] {
+            sendSystemKey(keyCode: keyCode, actionName: name)
+        } else {
+            log("  unknown system action: \(name)")
         }
     case .keyCombo(let combo):
-        var flags = CGEventFlags()
-        for mod in combo.modifiers {
-            if let f = modifierMap[mod.lowercased()] {
-                flags.insert(f)
-            }
-        }
-        postKeyCombo(modifiers: flags, keyCode: combo.keyCode)
+        log("action: key combo 0x\(String(combo.keyCode, radix: 16)) mods=\(combo.modifiers)")
+        sendKeyCombo(keyCode: combo.keyCode, modifierNames: combo.modifiers)
     }
 }
 
-private func postKeyCombo(modifiers: CGEventFlags, keyCode: UInt16) {
-    guard let down = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else { return }
-    down.flags = modifiers
-    guard let up = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else { return }
-    up.flags = modifiers
-    down.post(tap: .cgAnnotatedSessionEventTap)
-    up.post(tap: .cgAnnotatedSessionEventTap)
+private let scriptQueue = DispatchQueue(label: "osascript")
+
+private func sendSystemKey(keyCode: UInt16, actionName: String) {
+    let modStrings: [String]
+    switch actionName {
+    case "mission_control":
+        modStrings = ["control down"]
+    case "app_expose":
+        modStrings = ["control down"]
+    case "show_desktop":
+        modStrings = ["command down", "option down"]
+    case "launchpad":
+        modStrings = []
+    case "screenshot":
+        modStrings = ["command down", "shift down"]
+    default:
+        modStrings = ["command down"]
+    }
+    runScript(keyCode: keyCode, modifiers: modStrings)
+}
+
+private func sendKeyCombo(keyCode: UInt16, modifierNames: [String]) {
+    let modStrings = modifierNames.compactMap { modifierAppleScriptMap[$0.lowercased()] }
+    if modStrings.isEmpty {
+        runScript(keyCode: keyCode, modifiers: [])
+    } else {
+        runScript(keyCode: keyCode, modifiers: modStrings)
+    }
+}
+
+private func runScript(keyCode: UInt16, modifiers: [String]) {
+    let modPart = modifiers.isEmpty ? "" : " using {" + modifiers.joined(separator: ", ") + "}"
+    let script = "tell application \"System Events\" to key code \(keyCode)" + modPart
+    log("  osascript: \(script)")
+    scriptQueue.async {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        try? task.run()
+        task.waitUntilExit()
+        if task.terminationStatus != 0 {
+            log("  osascript failed (code \(task.terminationStatus))")
+        } else {
+            log("  osascript OK")
+        }
+    }
 }

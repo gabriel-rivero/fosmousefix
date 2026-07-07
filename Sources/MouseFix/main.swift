@@ -9,16 +9,17 @@ func eprint(_ items: Any..., terminator: String = "\n") {
 
 func printUsage() {
     let name = CommandLine.arguments.first ?? "MouseFix"
-    eprint("Usage: \(name) [--config <path>] [--install] [--uninstall] [--validate] [--listen]")
+    eprint("Usage: \(name) [--config <path>] [--install] [--uninstall] [--validate] [--listen] [--verbose]")
 }
 
-func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: Bool, shouldValidate: Bool, shouldListen: Bool) {
+func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: Bool, shouldValidate: Bool, shouldListen: Bool, verbose: Bool) {
     let args = CommandLine.arguments.dropFirst()
     var configPath: String?
     var shouldInstall = false
     var shouldUninstall = false
     var shouldValidate = false
     var shouldListen = false
+    var verbose = false
 
     var it = args.makeIterator()
     while let arg = it.next() {
@@ -33,6 +34,8 @@ func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: 
             shouldValidate = true
         case "--listen":
             shouldListen = true
+        case "--verbose":
+            verbose = true
         case "--help", "-h":
             printUsage()
             exit(0)
@@ -42,7 +45,7 @@ func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: 
             exit(1)
         }
     }
-    return (configPath, shouldInstall, shouldUninstall, shouldValidate, shouldListen)
+    return (configPath, shouldInstall, shouldUninstall, shouldValidate, shouldListen, verbose)
 }
 
 func installLaunchAgent() {
@@ -202,6 +205,10 @@ func runListener() {
 func main() {
     let parsed = parseArgs()
 
+    if parsed.verbose {
+        verboseEnabled = true
+    }
+
     if parsed.shouldListen {
         runListener()
         return
@@ -233,6 +240,7 @@ func main() {
     }
 
     eprint("MouseFix running (config: \(configPath))")
+    if verboseEnabled { eprint("Verbose logging enabled") }
     eprint("Press Ctrl+C to stop.")
 
     signal(SIGINT) { _ in
