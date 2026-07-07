@@ -75,18 +75,18 @@ public struct AppConfig: Codable {
     public var smoothScrolling: SmoothScrollingConfig = .init()
     public var scrollDirection: ScrollDirectionConfig = .init()
     public var mappings: [Mapping] = [
-        .init(button: 3, trigger: "click", action: .system("mission_control")),
-        .init(button: 4, trigger: "click", action: .system("back")),
-        .init(button: 5, trigger: "click", action: .system("forward")),
+        .init(button: 3, trigger: "click", action: .system("back")),
+        .init(button: 4, trigger: "click", action: .system("forward")),
+        .init(button: 5, trigger: "click", action: .system("mission_control")),
     ]
 
     public init(
         smoothScrolling: SmoothScrollingConfig = .init(),
         scrollDirection: ScrollDirectionConfig = .init(),
         mappings: [Mapping] = [
-            .init(button: 3, trigger: "click", action: .system("mission_control")),
-            .init(button: 4, trigger: "click", action: .system("back")),
-            .init(button: 5, trigger: "click", action: .system("forward")),
+            .init(button: 3, trigger: "click", action: .system("back")),
+            .init(button: 4, trigger: "click", action: .system("forward")),
+            .init(button: 5, trigger: "click", action: .system("mission_control")),
         ]
     ) {
         self.smoothScrolling = smoothScrolling
@@ -99,9 +99,9 @@ public struct AppConfig: Codable {
         smoothScrolling = try c.decodeIfPresent(SmoothScrollingConfig.self, forKey: .smoothScrolling) ?? .init()
         scrollDirection = try c.decodeIfPresent(ScrollDirectionConfig.self, forKey: .scrollDirection) ?? .init()
         mappings = try c.decodeIfPresent([Mapping].self, forKey: .mappings) ?? [
-            .init(button: 3, trigger: "click", action: .system("mission_control")),
-            .init(button: 4, trigger: "click", action: .system("back")),
-            .init(button: 5, trigger: "click", action: .system("forward")),
+            .init(button: 3, trigger: "click", action: .system("back")),
+            .init(button: 4, trigger: "click", action: .system("forward")),
+            .init(button: 5, trigger: "click", action: .system("mission_control")),
         ]
     }
 }
