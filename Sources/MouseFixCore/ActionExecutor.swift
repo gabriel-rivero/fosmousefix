@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-let systemActions: [String: (CGEventFlags, UInt16)] = [
+public let systemActions: [String: (CGEventFlags, UInt16)] = [
     "mission_control":    ([.maskControl], 0x7E),
     "app_expose":         ([.maskControl], 0x7D),
     "show_desktop":       ([.maskCommand, .maskAlternate], 0x03),

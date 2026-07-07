@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-final class EventTapManager {
-    nonisolated(unsafe) static let shared = EventTapManager()
+public final class EventTapManager {
+    nonisolated(unsafe) public static let shared = EventTapManager()
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -26,7 +26,7 @@ final class EventTapManager {
         return manager.handle(event: event, type: type, proxy: proxy)
     }
 
-    func start(with config: AppConfig) -> Bool {
+    public func start(with config: AppConfig) -> Bool {
         scrollSmoother.config = config.smoothScrolling
         scrollDirectionController.config = config.scrollDirection
         buttonMapper.load(mappings: config.mappings)
@@ -54,7 +54,7 @@ final class EventTapManager {
         return true
     }
 
-    func stop() {
+    public func stop() {
         guard isRunning else { return }
         isRunning = false
         if let rls = runLoopSource {

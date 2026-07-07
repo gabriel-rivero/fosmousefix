@@ -1,16 +1,20 @@
 import Foundation
 
-struct Mapping: Codable {
-    let button: Int
-    let trigger: String
-    let action: ActionDef
+public struct Mapping: Codable {
+    public var button: Int
+    public var trigger: String
+    public var action: ActionDef
+
+    public init(button: Int, trigger: String, action: ActionDef) {
+        self.button = button; self.trigger = trigger; self.action = action
+    }
 }
 
-enum ActionDef: Codable, Equatable {
+public enum ActionDef: Codable, Equatable, Hashable {
     case system(String)
     case keyCombo(KeyCombo)
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let str = try? container.decode(String.self) {
             self = .system(str)
@@ -19,7 +23,7 @@ enum ActionDef: Codable, Equatable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .system(let name): try container.encode(name)
@@ -28,51 +32,55 @@ enum ActionDef: Codable, Equatable {
     }
 }
 
-struct KeyCombo: Codable, Equatable {
-    let keyCode: UInt16
-    let modifiers: [String]
+public struct KeyCombo: Codable, Equatable, Hashable {
+    public let keyCode: UInt16
+    public let modifiers: [String]
+
+    public init(keyCode: UInt16, modifiers: [String]) {
+        self.keyCode = keyCode; self.modifiers = modifiers
+    }
 }
 
-struct SmoothScrollingConfig: Codable {
-    var enabled: Bool = true
-    var intensity: Double = 0.7
+public struct SmoothScrollingConfig: Codable {
+    public var enabled: Bool = true
+    public var intensity: Double = 0.7
 
-    init(enabled: Bool = true, intensity: Double = 0.7) {
+    public init(enabled: Bool = true, intensity: Double = 0.7) {
         self.enabled = enabled; self.intensity = intensity
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         intensity = try c.decodeIfPresent(Double.self, forKey: .intensity) ?? 0.7
     }
 }
 
-struct ScrollDirectionConfig: Codable {
-    var flipVertical: Bool = false
-    var flipHorizontal: Bool = false
+public struct ScrollDirectionConfig: Codable {
+    public var flipVertical: Bool = false
+    public var flipHorizontal: Bool = false
 
-    init(flipVertical: Bool = false, flipHorizontal: Bool = false) {
+    public init(flipVertical: Bool = false, flipHorizontal: Bool = false) {
         self.flipVertical = flipVertical; self.flipHorizontal = flipHorizontal
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         flipVertical = try c.decodeIfPresent(Bool.self, forKey: .flipVertical) ?? false
         flipHorizontal = try c.decodeIfPresent(Bool.self, forKey: .flipHorizontal) ?? false
     }
 }
 
-struct AppConfig: Codable {
-    var smoothScrolling: SmoothScrollingConfig = .init()
-    var scrollDirection: ScrollDirectionConfig = .init()
-    var mappings: [Mapping] = [
+public struct AppConfig: Codable {
+    public var smoothScrolling: SmoothScrollingConfig = .init()
+    public var scrollDirection: ScrollDirectionConfig = .init()
+    public var mappings: [Mapping] = [
         .init(button: 3, trigger: "click", action: .system("mission_control")),
         .init(button: 4, trigger: "click", action: .system("back")),
         .init(button: 5, trigger: "click", action: .system("forward")),
     ]
 
-    init(
+    public init(
         smoothScrolling: SmoothScrollingConfig = .init(),
         scrollDirection: ScrollDirectionConfig = .init(),
         mappings: [Mapping] = [
@@ -86,7 +94,7 @@ struct AppConfig: Codable {
         self.mappings = mappings
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         smoothScrolling = try c.decodeIfPresent(SmoothScrollingConfig.self, forKey: .smoothScrolling) ?? .init()
         scrollDirection = try c.decodeIfPresent(ScrollDirectionConfig.self, forKey: .scrollDirection) ?? .init()
@@ -98,16 +106,25 @@ struct AppConfig: Codable {
     }
 }
 
-func defaultConfigPath() -> String {
+public func defaultConfigPath() -> String {
     NSHomeDirectory() + "/.config/mousefix/config.json"
 }
 
-func loadConfig(path: String? = nil) -> AppConfig {
+public func loadConfig(path: String? = nil) -> AppConfig {
     let path = path ?? defaultConfigPath()
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-          let config = try? JSONDecoder().decode(AppConfig.self, from: data)
+          let config = try? decoder.decode(AppConfig.self, from: data)
     else {
         return AppConfig()
     }
     return config
+}
+
+public func encodeConfig(_ config: AppConfig) -> Data? {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    return try? encoder.encode(config)
 }

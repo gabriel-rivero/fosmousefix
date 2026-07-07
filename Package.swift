@@ -5,6 +5,8 @@ let package = Package(
     name: "MouseFix",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "MouseFix"),
+        .target(name: "MouseFixCore"),
+        .executableTarget(name: "MouseFix", dependencies: ["MouseFixCore"]),
+        .executableTarget(name: "Preferences", dependencies: ["MouseFixCore"]),
     ]
 )

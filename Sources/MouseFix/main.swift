@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import MouseFixCore
 
 func eprint(_ items: Any..., terminator: String = "\n") {
     let msg = items.map { "\($0)" }.joined(separator: " ") + terminator
@@ -8,15 +9,16 @@ func eprint(_ items: Any..., terminator: String = "\n") {
 
 func printUsage() {
     let name = CommandLine.arguments.first ?? "MouseFix"
-    eprint("Usage: \(name) [--config <path>] [--install] [--uninstall] [--validate]")
+    eprint("Usage: \(name) [--config <path>] [--install] [--uninstall] [--validate] [--listen]")
 }
 
-func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: Bool, shouldValidate: Bool) {
+func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: Bool, shouldValidate: Bool, shouldListen: Bool) {
     let args = CommandLine.arguments.dropFirst()
     var configPath: String?
     var shouldInstall = false
     var shouldUninstall = false
     var shouldValidate = false
+    var shouldListen = false
 
     var it = args.makeIterator()
     while let arg = it.next() {
@@ -29,6 +31,8 @@ func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: 
             shouldUninstall = true
         case "--validate":
             shouldValidate = true
+        case "--listen":
+            shouldListen = true
         case "--help", "-h":
             printUsage()
             exit(0)
@@ -38,7 +42,7 @@ func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: 
             exit(1)
         }
     }
-    return (configPath, shouldInstall, shouldUninstall, shouldValidate)
+    return (configPath, shouldInstall, shouldUninstall, shouldValidate, shouldListen)
 }
 
 func installLaunchAgent() {
@@ -87,15 +91,17 @@ func uninstallLaunchAgent() {
 
 func runValidation() -> Bool {
     var ok = true
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
 
     var config = AppConfig()
     eprint("✓ default config: \(config.mappings.count) mappings, smooth=\(config.smoothScrolling.enabled)")
 
     config.smoothScrolling.intensity = 0.5
     config.mappings.append(.init(button: 6, trigger: "click", action: .system("screenshot")))
-    if let data = try? JSONEncoder().encode(config),
-       let decoded = try? JSONDecoder().decode(AppConfig.self, from: data) {
-        eprint("✓ config round-trip: \(decoded.mappings.count) mappings")
+    if let data = encodeConfig(config),
+       let decoded = try? decoder.decode(AppConfig.self, from: data) {
+        eprint("✓ config round-trip: \(decoded.mappings.count) mappings, intensity=\(decoded.smoothScrolling.intensity)")
     } else {
         eprint("✗ config round-trip failed"); ok = false
     }
@@ -104,7 +110,7 @@ func runValidation() -> Bool {
     {"smooth_scrolling":{"enabled":true,"intensity":0.3},"scroll_direction":{"flip_vertical":false},"mappings":[{"button":4,"trigger":"click","action":"back"}]}
     """
     if let data = testJSON.data(using: .utf8),
-       let parsed = try? JSONDecoder().decode(AppConfig.self, from: data) {
+       let parsed = try? decoder.decode(AppConfig.self, from: data) {
         eprint("✓ config parse: intensity=\(parsed.smoothScrolling.intensity), mappings=\(parsed.mappings.count)")
     } else {
         eprint("✗ config parse failed"); ok = false
@@ -114,7 +120,7 @@ func runValidation() -> Bool {
     {"mappings":[{"button":5,"trigger":"click","action":"forward"}]}
     """
     if let data = minimalJSON.data(using: .utf8),
-       let parsed = try? JSONDecoder().decode(AppConfig.self, from: data) {
+       let parsed = try? decoder.decode(AppConfig.self, from: data) {
         eprint("✓ minimal config parse: smooth=\(parsed.smoothScrolling.enabled), mappings=\(parsed.mappings.count)")
     } else {
         eprint("✗ minimal config parse failed"); ok = false
@@ -144,8 +150,62 @@ func runValidation() -> Bool {
     return ok
 }
 
+func runListener() {
+    var mask: CGEventMask = 0
+    mask |= (1 << CGEventType.otherMouseDown.rawValue)
+    mask |= (1 << CGEventType.otherMouseUp.rawValue)
+    mask |= (1 << CGEventType.leftMouseDown.rawValue)
+    mask |= (1 << CGEventType.leftMouseUp.rawValue)
+    mask |= (1 << CGEventType.rightMouseDown.rawValue)
+    mask |= (1 << CGEventType.rightMouseUp.rawValue)
+
+    let callback: CGEventTapCallBack = { _, type, event, _ in
+        let btn = event.getIntegerValueField(.mouseEventButtonNumber)
+        let loc = event.location
+        let kind: String
+        switch type {
+        case .leftMouseDown: kind = "down"
+        case .leftMouseUp: kind = "up"
+        case .rightMouseDown: kind = "down"
+        case .rightMouseUp: kind = "up"
+        case .otherMouseDown: kind = "down"
+        case .otherMouseUp: kind = "up"
+        default: kind = "?"
+        }
+        eprint("button=\(btn) \(kind)  x=\(Int(loc.x)) y=\(Int(loc.y))")
+        return Unmanaged.passUnretained(event)
+    }
+
+    guard let tap = CGEvent.tapCreate(
+        tap: .cgSessionEventTap,
+        place: .headInsertEventTap,
+        options: .defaultTap,
+        eventsOfInterest: mask,
+        callback: callback,
+        userInfo: nil
+    ) else {
+        eprint("Failed to create event tap. Grant Accessibility permission.")
+        exit(1)
+    }
+
+    let rls = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), rls, .commonModes)
+    CGEvent.tapEnable(tap: tap, enable: true)
+
+    eprint("Listening for mouse button events. Press buttons to see their numbers.")
+    eprint("Press Ctrl+C to stop.")
+    signal(SIGINT) { _ in exit(0) }
+    signal(SIGTERM) { _ in exit(0) }
+    CFRunLoopRun()
+}
+
 func main() {
     let parsed = parseArgs()
+
+    if parsed.shouldListen {
+        runListener()
+        return
+    }
 
     if parsed.shouldValidate {
         exit(runValidation() ? 0 : 1)
