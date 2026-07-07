@@ -22,6 +22,6 @@ jobs:
       - name: Validate (${{ matrix.config }})
         if: matrix.config == 'release'
         run: |
-          BIN=$(find .build -name MouseFix -type f 2>/dev/null | head -1)
+          BIN="$(swift build -c release --show-bin-path)/MouseFix"
           echo "Binary at: $BIN"
           "$BIN" --validate
