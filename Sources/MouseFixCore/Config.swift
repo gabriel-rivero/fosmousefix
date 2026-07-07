@@ -42,16 +42,16 @@ public struct KeyCombo: Codable, Equatable, Hashable {
 }
 
 public struct SmoothScrollingConfig: Codable {
-    public var enabled: Bool = true
+    public var enabled: Bool = false
     public var intensity: Double = 0.7
 
-    public init(enabled: Bool = true, intensity: Double = 0.7) {
+    public init(enabled: Bool = false, intensity: Double = 0.7) {
         self.enabled = enabled; self.intensity = intensity
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         intensity = try c.decodeIfPresent(Double.self, forKey: .intensity) ?? 0.7
     }
 }
