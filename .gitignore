@@ -1,8 +1,9 @@
-.build/
-.build-x86_64/
 .build-arm64/
+.build-x86_64/
+.build/
 .DS_Store
-*.swp
 *.swo
-*.xcworkspace
+*.swp
 *.xcuserdata
+*.xcworkspace
+MouseFix Preferences.app/

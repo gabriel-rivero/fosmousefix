@@ -4,12 +4,14 @@ import MouseFixCore
 @main
 struct MouseFixApp: App {
     @State private var config = loadConfig()
+    @State private var daemonStatus = DaemonStatus.check()
 
     var body: some Scene {
         Window("MouseFix Preferences", id: "prefs") {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
+                        daemonSection
                         scrollSection
                         directionSection
                         mappingSection
@@ -26,12 +28,180 @@ struct MouseFixApp: App {
                 }
                 .padding()
             }
-            .frame(width: 520, height: 520)
+            .frame(width: 520, height: 620)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
                 config = loadConfig()
+                daemonStatus = DaemonStatus.check()
             }
         }
     }
+
+    // MARK: - Daemon
+
+    private var daemonSection: some View {
+        GroupBox("Daemon") {
+            HStack {
+                Image(systemName: daemonStatus.icon)
+                    .foregroundStyle(daemonStatus.color)
+                Text(daemonStatus.label)
+                    .font(.caption)
+                Spacer()
+                if !daemonStatus.installed {
+                    Button("Install Daemon") { installDaemon() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.accentColor)
+                } else {
+                    Button("Uninstall") { uninstallDaemon() }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                }
+            }
+            .padding(8)
+        }
+    }
+
+    private func daemonBinaryPath() -> URL? {
+        // Prefer bundled daemon inside the .app bundle
+        if let bundled = Bundle.main.url(forResource: "daemon", withExtension: nil) {
+            return bundled
+        }
+        // Fall back to known build paths
+        var candidates: [String] = [
+            "/usr/local/bin/mousefix",
+            NSHomeDirectory() + "/bin/mousefix",
+        ]
+        if let firstArg = CommandLine.arguments.first {
+            let siblingPath = URL(fileURLWithPath: firstArg).deletingLastPathComponent().appendingPathComponent("MouseFix").path
+            candidates.append(siblingPath)
+        }
+        for path in candidates {
+            if FileManager.default.fileExists(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        return nil
+    }
+
+    private func installDaemon() {
+        guard let daemonURL = daemonBinaryPath() else {
+            let alert = NSAlert()
+            alert.messageText = "Daemon binary not found"
+            alert.informativeText = "Build the project first with: swift build -c release"
+            alert.runModal()
+            return
+        }
+
+        let daemonPath = daemonURL.path
+        let installPath = "/usr/local/bin/mousefix"
+        let configPath = defaultConfigPath()
+
+        // Copy: try direct first, fall back to admin osascript
+        let fm = FileManager.default
+        try? fm.removeItem(atPath: installPath)
+        var copied = false
+        if (try? fm.copyItem(atPath: daemonPath, toPath: installPath)) != nil {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installPath)
+            copied = true
+        } else {
+            let script = """
+            do shell script "mkdir -p /usr/local/bin && rm -f '\(installPath)' && cp '\(daemonPath)' '\(installPath)' && chmod 755 '\(installPath)'" with administrator privileges
+            """
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", script]
+            try? task.run()
+            task.waitUntilExit()
+            copied = task.terminationStatus == 0
+        }
+
+        guard copied else {
+            let alert = NSAlert()
+            alert.messageText = "Installation failed"
+            alert.informativeText = "Could not copy the daemon binary."
+            alert.runModal()
+            return
+        }
+
+        // Create default config if missing
+        if !fm.fileExists(atPath: configPath) {
+            if let data = encodeConfig(config) {
+                try? fm.createDirectory(atPath: (configPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                try? data.write(to: URL(fileURLWithPath: configPath))
+            }
+        }
+
+        // Create launch agent plist
+        let agentLabel = "com.mousefix.daemon"
+        let plistPath = NSHomeDirectory() + "/Library/LaunchAgents/\(agentLabel).plist"
+        let plist: [String: Any] = [
+            "Label": agentLabel,
+            "ProgramArguments": [installPath, "--verbose"],
+            "RunAtLoad": true,
+            "KeepAlive": true,
+            "ProcessType": "Background",
+            "EnvironmentVariables": ["PATH": "/usr/local/bin:/usr/bin:/bin"],
+            "StandardOutPath": NSHomeDirectory() + "/Library/Logs/MouseFix.log",
+            "StandardErrorPath": NSHomeDirectory() + "/Library/Logs/MouseFix.log",
+        ]
+        try? fm.createDirectory(atPath: (plistPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        if let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+            try? data.write(to: URL(fileURLWithPath: plistPath))
+        }
+
+        // Load launch agent
+        let loadTask = Process()
+        loadTask.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        loadTask.arguments = ["load", plistPath]
+        try? loadTask.run()
+        loadTask.waitUntilExit()
+
+        daemonStatus = DaemonStatus.check()
+
+        // Check accessibility
+        if !checkAccessibility() {
+            let alert = NSAlert()
+            alert.messageText = "Accessibility Permission Required"
+            alert.informativeText = "Open System Settings → Privacy & Security → Accessibility and add \(installPath)"
+            alert.runModal()
+        }
+    }
+
+    private func uninstallDaemon() {
+        let installPath = "/usr/local/bin/mousefix"
+        let agentLabel = "com.mousefix.daemon"
+        let plistPath = NSHomeDirectory() + "/Library/LaunchAgents/\(agentLabel).plist"
+
+        // Unload launch agent
+        if FileManager.default.fileExists(atPath: plistPath) {
+            let unloadTask = Process()
+            unloadTask.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            unloadTask.arguments = ["unload", plistPath]
+            try? unloadTask.run()
+            unloadTask.waitUntilExit()
+            try? FileManager.default.removeItem(atPath: plistPath)
+        }
+
+        // Kill daemon
+        let killTask = Process()
+        killTask.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        killTask.arguments = ["-9", "-f", "^\(installPath)$"]
+        try? killTask.run()
+
+        // Remove binary: try direct first, fall back to admin
+        try? FileManager.default.removeItem(atPath: installPath)
+        if FileManager.default.fileExists(atPath: installPath) {
+            let script = "do shell script \"rm -f '\(installPath)'\" with administrator privileges"
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", script]
+            try? task.run()
+            task.waitUntilExit()
+        }
+
+        daemonStatus = DaemonStatus.check()
+    }
+
+    // MARK: - Scrolling
 
     private var scrollSection: some View {
         GroupBox("Scrolling") {
@@ -49,6 +219,8 @@ struct MouseFixApp: App {
         }
     }
 
+    // MARK: - Direction
+
     private var directionSection: some View {
         GroupBox("Scroll Direction") {
             VStack(alignment: .leading, spacing: 8) {
@@ -58,6 +230,8 @@ struct MouseFixApp: App {
             .padding(8)
         }
     }
+
+    // MARK: - Mappings
 
     private var mappingSection: some View {
         GroupBox("Button Mappings") {
@@ -99,12 +273,76 @@ struct MouseFixApp: App {
         let url = URL(fileURLWithPath: defaultConfigPath())
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url)
-        // Signal daemon (handles both mousefix and MouseFix process names)
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         task.arguments = ["-HUP", "-i", "mousefix"]
         try? task.run()
     }
+}
+
+// MARK: - Daemon Status
+
+struct DaemonStatus {
+    let installed: Bool
+    let running: Bool
+    let accessibilityGranted: Bool
+
+    var label: String {
+        if !installed { return "Not installed" }
+        if !running { return "Installed — not running" }
+        if !accessibilityGranted { return "Running — no accessibility permission" }
+        return "Running"
+    }
+
+    var icon: String {
+        if !installed { return "circle.slash" }
+        if !running { return "exclamationmark.triangle" }
+        if !accessibilityGranted { return "exclamationmark.triangle" }
+        return "checkmark.circle"
+    }
+
+    var color: Color {
+        if !installed { return .gray }
+        if !running { return .orange }
+        if !accessibilityGranted { return .orange }
+        return .green
+    }
+
+    static func check() -> DaemonStatus {
+        let installPath = "/usr/local/bin/mousefix"
+        let installed = FileManager.default.fileExists(atPath: installPath)
+
+        // Check running via launchctl
+        var running = false
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = ["print", "gui/\(getuid())/com.mousefix.daemon"]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        try? task.run()
+        task.waitUntilExit()
+        running = task.terminationStatus == 0
+
+        let accessibilityGranted = installed ? checkAccessibility() : false
+        return DaemonStatus(installed: installed, running: running, accessibilityGranted: accessibilityGranted)
+    }
+}
+
+private func checkAccessibility() -> Bool {
+    let mask: CGEventMask = 1 << CGEventType.otherMouseDown.rawValue
+    let tap = CGEvent.tapCreate(
+        tap: .cgSessionEventTap,
+        place: .headInsertEventTap,
+        options: .defaultTap,
+        eventsOfInterest: mask,
+        callback: { _, _, _, _ in return nil },
+        userInfo: nil
+    )
+    if let t = tap {
+        CFMachPortInvalidate(t)
+        return true
+    }
+    return false
 }
 
 private let triggers = ["click", "double_click", "hold", "hold_scroll_up", "hold_scroll_down", "drag_up", "drag_down", "drag_left", "drag_right", "drag"]
