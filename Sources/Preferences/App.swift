@@ -99,9 +99,10 @@ struct MouseFixApp: App {
         let url = URL(fileURLWithPath: defaultConfigPath())
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url)
+        // Signal daemon (handles both mousefix and MouseFix process names)
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        task.arguments = ["-HUP", "MouseFix"]
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-HUP", "-i", "mousefix"]
         try? task.run()
     }
 }

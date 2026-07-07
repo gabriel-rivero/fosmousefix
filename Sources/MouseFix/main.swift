@@ -2,6 +2,10 @@ import CoreGraphics
 import Foundation
 import MouseFixCore
 
+let installPath = "/usr/local/bin/mousefix"
+let launchAgentLabel = "com.mousefix.daemon"
+let launchAgentPlist = NSHomeDirectory() + "/Library/LaunchAgents/\(launchAgentLabel).plist"
+
 func eprint(_ items: Any..., terminator: String = "\n") {
     let msg = items.map { "\($0)" }.joined(separator: " ") + terminator
     FileHandle.standardError.write(Data(msg.utf8))
@@ -9,14 +13,25 @@ func eprint(_ items: Any..., terminator: String = "\n") {
 
 func printUsage() {
     let name = CommandLine.arguments.first ?? "MouseFix"
-    eprint("Usage: \(name) [--config <path>] [--install] [--uninstall] [--validate] [--listen] [--verbose]")
+    eprint("Usage: \(name) [options]")
+    eprint("")
+    eprint("Options:")
+    eprint("  --install              Install daemon to \(installPath) and load launch agent")
+    eprint("  --uninstall            Unload launch agent and remove files")
+    eprint("  --status               Check installation and accessibility status")
+    eprint("  --validate             Run self-tests")
+    eprint("  --listen               Print button numbers for all mouse events")
+    eprint("  --config <path>        Config file path (default: ~/.config/mousefix/config.json)")
+    eprint("  --verbose              Enable verbose logging")
+    eprint("  --help, -h             Show this help")
 }
 
-func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: Bool, shouldValidate: Bool, shouldListen: Bool, verbose: Bool) {
+func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: Bool, shouldStatus: Bool, shouldValidate: Bool, shouldListen: Bool, verbose: Bool) {
     let args = CommandLine.arguments.dropFirst()
     var configPath: String?
     var shouldInstall = false
     var shouldUninstall = false
+    var shouldStatus = false
     var shouldValidate = false
     var shouldListen = false
     var verbose = false
@@ -30,6 +45,8 @@ func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: 
             shouldInstall = true
         case "--uninstall":
             shouldUninstall = true
+        case "--status":
+            shouldStatus = true
         case "--validate":
             shouldValidate = true
         case "--listen":
@@ -45,52 +62,277 @@ func parseArgs() -> (configPath: String?, shouldInstall: Bool, shouldUninstall: 
             exit(1)
         }
     }
-    return (configPath, shouldInstall, shouldUninstall, shouldValidate, shouldListen, verbose)
+    return (configPath, shouldInstall, shouldUninstall, shouldStatus, shouldValidate, shouldListen, verbose)
 }
 
-func installLaunchAgent() {
-    let plistPath = NSHomeDirectory() + "/Library/LaunchAgents/com.mousefix.daemon.plist"
-    let binaryPath = CommandLine.arguments.first ?? "/usr/local/bin/mousefix"
+// MARK: - Privileged execution (via osascript + admin auth dialog)
 
+func runWithPrivileges(shellCommand: String) -> Bool {
+    let tempURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mousefix-install-\(getpid()).sh")
+    defer { try? FileManager.default.removeItem(at: tempURL) }
+
+    guard let data = "#!/bin/sh\nset -e\n\(shellCommand)\n".data(using: .utf8),
+          (try? data.write(to: tempURL)) != nil,
+          (try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tempURL.path)) != nil
+    else {
+        eprint("✗ Failed to create install script")
+        return false
+    }
+
+    let script = "do shell script \"\(tempURL.path)\" with administrator privileges"
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    task.arguments = ["-e", script]
+    task.standardOutput = Pipe()
+    task.standardError = Pipe()
+    try? task.run()
+    task.waitUntilExit()
+
+    if task.terminationStatus != 0 {
+        let errData = (task.standardError as? Pipe)?.fileHandleForReading.readDataToEndOfFile()
+        let errMsg = errData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        if errMsg.contains("User canceled") || errMsg.contains("(-128)") {
+            eprint("✗ Authentication cancelled")
+        }
+    }
+    return task.terminationStatus == 0
+}
+
+// MARK: - Accessibility check
+
+func checkAccessibility() -> Bool {
+    let mask: CGEventMask = 1 << CGEventType.otherMouseDown.rawValue
+    let tap = CGEvent.tapCreate(
+        tap: .cgSessionEventTap,
+        place: .headInsertEventTap,
+        options: .defaultTap,
+        eventsOfInterest: mask,
+        callback: { _, _, _, _ in return nil },
+        userInfo: nil
+    )
+    if let t = tap {
+        CFMachPortInvalidate(t)
+        return true
+    }
+    return false
+}
+
+// MARK: - Install
+
+func daemonPlistArguments() -> [String] {
+    [installPath, "--verbose"]
+}
+
+func createLaunchAgentPlist() -> Bool {
     let plist: [String: Any] = [
-        "Label": "com.mousefix.daemon",
-        "ProgramArguments": [binaryPath],
+        "Label": launchAgentLabel,
+        "ProgramArguments": daemonPlistArguments(),
         "RunAtLoad": true,
         "KeepAlive": true,
         "ProcessType": "Background",
         "EnvironmentVariables": ["PATH": "/usr/local/bin:/usr/bin:/bin"],
+        "StandardOutPath": NSHomeDirectory() + "/Library/Logs/MouseFix.log",
+        "StandardErrorPath": NSHomeDirectory() + "/Library/Logs/MouseFix.log",
     ]
 
-    let dir = (plistPath as NSString).deletingLastPathComponent
+    let dir = (launchAgentPlist as NSString).deletingLastPathComponent
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
     guard let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else {
-        eprint("Failed to create plist data")
+        eprint("✗ Failed to create plist data")
+        return false
+    }
+    try? data.write(to: URL(fileURLWithPath: launchAgentPlist))
+    return true
+}
+
+func runLaunchCtl(_ args: [String]) -> Bool {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    task.arguments = args
+    try? task.run()
+    task.waitUntilExit()
+    return task.terminationStatus == 0
+}
+
+func copyBinary(from src: String, to dst: String) -> Bool {
+    // Try direct copy first (works if user has write permission)
+    let fm = FileManager.default
+    try? fm.removeItem(atPath: dst)
+    if fm.fileExists(atPath: dst) { return false }
+    if (try? fm.copyItem(atPath: src, toPath: dst)) != nil {
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dst)
+        return true
+    }
+    // Fall back to admin auth
+    let cmd = "mkdir -p /usr/local/bin && rm -f '\(dst)' && cp '\(src)' '\(dst)' && chmod 755 '\(dst)'"
+    return runWithPrivileges(shellCommand: cmd)
+}
+
+func installDaemon() {
+    let selfPath = CommandLine.arguments.first!
+    let resolvedPath = URL(fileURLWithPath: selfPath).resolvingSymlinksInPath().path
+    eprint("Installing from: \(resolvedPath)")
+
+    guard copyBinary(from: resolvedPath, to: installPath) else {
+        eprint("✗ Failed to install binary")
         return
     }
-    try? data.write(to: URL(fileURLWithPath: plistPath))
+    eprint("✓ Installed to \(installPath)")
 
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    task.arguments = ["load", plistPath]
-    try? task.run()
-    task.waitUntilExit()
+    // Create default config if missing
+    let configPath = defaultConfigPath()
+    if !FileManager.default.fileExists(atPath: configPath) {
+        let defaultConfig = AppConfig()
+        if let data = encodeConfig(defaultConfig) {
+            try? FileManager.default.createDirectory(
+                atPath: (configPath as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true
+            )
+            try? data.write(to: URL(fileURLWithPath: configPath))
+            eprint("✓ Created default config at \(configPath)")
+        }
+    }
 
-    eprint("Launch agent installed at \(plistPath)")
+    // Unload existing launch agent (ignore failure — may not be loaded)
+    runLaunchCtl(["unload", launchAgentPlist])
+    // Small delay to ensure process exits
+    Thread.sleep(forTimeInterval: 0.3)
+
+    guard createLaunchAgentPlist() else { return }
+    eprint("✓ Created launch agent plist")
+
+    if runLaunchCtl(["load", launchAgentPlist]) {
+        eprint("✓ Launch agent loaded")
+    } else {
+        eprint("✗ Failed to load launch agent")
+    }
+
+    // Accessibility check
+    if checkAccessibility() {
+        eprint("✓ Accessibility permission is granted")
+    } else {
+        eprint("")
+        eprint("⚠  Accessibility permission is NOT granted.")
+        eprint("   Open System Settings → Privacy & Security → Accessibility")
+        eprint("   Add \"\(installPath)\" to the list, or check its checkbox.")
+        eprint("   Then run: \(CommandLine.arguments.first ?? "mousefix") --install")
+        eprint("")
+        eprint("   If the app doesn't appear, click the + button and navigate to")
+        eprint("   /usr/local/bin/mousefix (press Cmd+Shift+G to enter the path).")
+    }
 }
 
-func uninstallLaunchAgent() {
-    let plistPath = NSHomeDirectory() + "/Library/LaunchAgents/com.mousefix.daemon.plist"
+// MARK: - Uninstall
 
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    task.arguments = ["unload", plistPath]
-    try? task.run()
-    task.waitUntilExit()
+func uninstallDaemon() {
+    // Unload launch agent
+    if FileManager.default.fileExists(atPath: launchAgentPlist) {
+        if runLaunchCtl(["unload", launchAgentPlist]) {
+            eprint("✓ Launch agent unloaded")
+        } else {
+            eprint("⚠ Could not unload launch agent (may not be loaded)")
+        }
+        try? FileManager.default.removeItem(atPath: launchAgentPlist)
+        eprint("✓ Removed launch agent plist")
+    } else {
+        eprint("✓ No launch agent plist found")
+    }
 
-    try? FileManager.default.removeItem(atPath: plistPath)
-    eprint("Launch agent removed")
+    // Kill any running daemon process
+    let killTask = Process()
+    killTask.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+    killTask.arguments = ["-9", "-f", "^\(installPath)$"]
+    try? killTask.run()
+    killTask.waitUntilExit()
+
+    // Remove binary (with admin auth)
+    if FileManager.default.fileExists(atPath: installPath) {
+        let removeCmd = "rm -f '\(installPath)'"
+        if runWithPrivileges(shellCommand: removeCmd) {
+            eprint("✓ Removed \(installPath)")
+        } else {
+            eprint("⚠ Could not remove \(installPath)")
+        }
+    } else {
+        eprint("✓ No binary found at \(installPath)")
+    }
+
+    eprint("")
+    eprint("Config file preserved at \(defaultConfigPath())")
+    eprint("To remove it manually: rm \(defaultConfigPath())")
 }
+
+// MARK: - Status
+
+func runStatus() {
+    eprint("MouseFix Status")
+    eprint("===============")
+
+    // Binary
+    var isInstalled = false
+    if FileManager.default.fileExists(atPath: installPath) {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: installPath),
+           let size = attrs[.size] as? UInt64,
+           let mod = attrs[.modificationDate] as? Date {
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd HH:mm"
+            eprint("✓ Binary: \(installPath) (\(size) bytes, modified \(df.string(from: mod)))")
+        } else {
+            eprint("✓ Binary: \(installPath)")
+        }
+        isInstalled = true
+    } else {
+        eprint("✗ Binary: not found at \(installPath)")
+    }
+
+    // Launch agent plist
+    if FileManager.default.fileExists(atPath: launchAgentPlist) {
+        eprint("✓ Launch agent: \(launchAgentPlist)")
+    } else {
+        eprint("✗ Launch agent: not found")
+    }
+
+    // Daemon running
+    let runningTask = Process()
+    runningTask.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    runningTask.arguments = ["print", "gui/\(getuid())/\(launchAgentLabel)"]
+    runningTask.standardOutput = Pipe()
+    runningTask.standardError = Pipe()
+    try? runningTask.run()
+    runningTask.waitUntilExit()
+    if runningTask.terminationStatus == 0 {
+        eprint("✓ Daemon: running (via launch agent)")
+    } else {
+        // Check for any mousefix process
+        let pgrep = Process()
+        pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        pgrep.arguments = ["-f", "[M]ouseFix"]
+        pgrep.standardOutput = Pipe()
+        try? pgrep.run()
+        pgrep.waitUntilExit()
+        if pgrep.terminationStatus == 0 {
+            let data = (pgrep.standardOutput as! Pipe).fileHandleForReading.readDataToEndOfFile()
+            let pids = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            eprint("✓ Daemon: running (PID \(pids))")
+        } else if isInstalled {
+            eprint("✗ Daemon: not running")
+        }
+    }
+
+    // Accessibility
+    if isInstalled {
+        if checkAccessibility() {
+            eprint("✓ Accessibility: granted")
+        } else {
+            eprint("✗ Accessibility: NOT granted")
+            eprint("   Add \(installPath) in System Settings → Privacy & Security → Accessibility")
+        }
+    }
+}
+
+// MARK: - Validation
 
 func runValidation() -> Bool {
     var ok = true
@@ -153,6 +395,8 @@ func runValidation() -> Bool {
     return ok
 }
 
+// MARK: - Listener
+
 func runListener() {
     var mask: CGEventMask = 0
     mask |= (1 << CGEventType.otherMouseDown.rawValue)
@@ -202,6 +446,8 @@ func runListener() {
     CFRunLoopRun()
 }
 
+// MARK: - Main
+
 func main() {
     let parsed = parseArgs()
 
@@ -219,15 +465,21 @@ func main() {
     }
 
     if parsed.shouldUninstall {
-        uninstallLaunchAgent()
+        uninstallDaemon()
         return
     }
 
     if parsed.shouldInstall {
-        installLaunchAgent()
+        installDaemon()
         return
     }
 
+    if parsed.shouldStatus {
+        runStatus()
+        return
+    }
+
+    // Run as daemon
     let configPath = parsed.configPath ?? defaultConfigPath()
     let config = loadConfig(path: configPath)
 
@@ -251,7 +503,6 @@ func main() {
         EventTapManager.shared.stop()
         exit(0)
     }
-
     CFRunLoopRun()
 }
 
