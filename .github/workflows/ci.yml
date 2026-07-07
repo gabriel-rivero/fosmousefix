@@ -17,16 +17,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Show Swift version
         run: swift --version
-      - name: Build & Validate (${{ matrix.config }})
+      - name: Build (${{ matrix.config }})
+        run: swift build -c ${{ matrix.config }}
+      - name: Validate (${{ matrix.config }})
+        if: matrix.config == 'release'
         run: |
-          swift build -c ${{ matrix.config }} --target MouseFix
-          swift build -c ${{ matrix.config }} --target Preferences
-          if [ '${{ matrix.config }}' = 'release' ]; then
-            echo "=== .build structure ==="
-            find .build -name MouseFix -o -name Preferences 2>/dev/null
-            echo "=== show-bin-path ==="
-            swift build -c ${{ matrix.config }} --show-bin-path
-            BIN=$(find .build -name MouseFix -type f 2>/dev/null | head -1)
-            if [ -z "$BIN" ]; then echo "Binary not found"; exit 1; fi
-            "$BIN" --validate
-          fi
+          BIN=$(find .build -name MouseFix -type f 2>/dev/null | head -1)
+          echo "Binary at: $BIN"
+          "$BIN" --validate
