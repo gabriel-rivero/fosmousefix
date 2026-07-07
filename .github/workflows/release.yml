@@ -33,8 +33,8 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
-      - name: Build release
-        run: swift build -c release
+      - name: Build release (includes daemon binary)
+        run: BUILD_DAEMON=1 swift build -c release
 
       - name: Run validation
         run: |
@@ -83,8 +83,10 @@ jobs:
             ```bash
             git clone https://github.com/gabriel-rivero/fosmousefix
             cd fosmousefix
-            swift build -c release
-            .build/arm64-apple-macosx/release/MouseFix --install
+            bash scripts/create-app-bundle.sh
+            cp -R "MouseFix Preferences.app" /Applications/
+            open /Applications/MouseFix\ Preferences.app/
+            # Then click Install Daemon inside the app
             ```
           draft: false
           prerelease: false
