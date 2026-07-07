@@ -1,0 +1,8 @@
+.build/
+.build-x86_64/
+.build-arm64/
+.DS_Store
+*.swp
+*.swo
+*.xcworkspace
+*.xcuserdata
