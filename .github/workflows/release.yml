@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build release
+        run: swift build -c release
+
+      - name: Run validation
+        run: |
+          BIN="$(swift build -c release --show-bin-path)/MouseFix"
+          "$BIN" --validate
+
+      - name: Create .app bundle
+        run: bash scripts/create-app-bundle.sh
+
+      - name: Create archive
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          APP_DIR="MouseFix Preferences.app"
+          ARCHIVE="MouseFix-${VERSION}.zip"
+
+          # Include the bare daemon binary too
+          mkdir -p archive
+          cp -R "$APP_DIR" archive/
+          cp "$(swift build -c release --show-bin-path)/MouseFix" archive/mousefix
+
+          cd archive
+          zip -r "../$ARCHIVE" .
+          cd ..
+
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+        id: archive
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: MouseFix ${{ steps.version.outputs.tag }}
+          body: |
+            ## MouseFix ${{ steps.version.outputs.tag }}
+
+            ### Download
+            - **MouseFix-${{ steps.version.outputs.tag }}.zip** — contains MouseFix Preferences.app (drag to Applications) and the `mousefix` daemon binary
+
+            ### Install
+            1. Download and unzip
+            2. Move `MouseFix Preferences.app` to `/Applications`
+            3. Open the app and click **Install Daemon**
+            4. Grant Accessibility permission when prompted
+
+            ### Build from source
+            ```bash
+            git clone https://github.com/gabriel-rivero/fosmousefix
+            cd fosmousefix
+            swift build -c release
+            .build/arm64-apple-macosx/release/MouseFix --install
+            ```
+          draft: false
+          prerelease: false
+          files: |
+            ${{ steps.archive.outputs.archive }}
