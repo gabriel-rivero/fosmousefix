@@ -22,6 +22,7 @@ jobs:
           swift build -c ${{ matrix.config }} --target MouseFix
           swift build -c ${{ matrix.config }} --target Preferences
           if [ '${{ matrix.config }}' = 'release' ]; then
-            BIN_DIR=$(swift build -c ${{ matrix.config }} --show-bin-path)
-            "$BIN_DIR/MouseFix" --validate
+            BIN=$(find .build -path '*/release/MouseFix' -type f | head -1)
+            if [ -z "$BIN" ]; then echo "Binary not found"; exit 1; fi
+            "$BIN" --validate
           fi
