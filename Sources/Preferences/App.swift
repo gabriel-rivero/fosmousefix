@@ -28,7 +28,7 @@ struct MouseFixApp: App {
                 }
                 .padding()
             }
-            .frame(width: 520, height: 620)
+            .frame(width: 620, height: 620)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willBecomeActiveNotification)) { _ in
                 config = loadConfig()
                 daemonStatus = DaemonStatus.check()
@@ -257,15 +257,50 @@ struct MouseFixApp: App {
                 ForEach(triggers, id: \.self) { t in Text(t).tag(t) }
             }
             .labelsHidden().frame(width: 120)
-            Picker("", selection: $config.mappings[i].action) {
-                ForEach(actionNames, id: \.self) { a in
-                    Text(a).tag(ActionDef.system(a) as ActionDef)
-                }
+            Picker("", selection: actionKindBinding(i)) {
+                ForEach(actionNames, id: \.self) { a in Text(a).tag(a) }
+                Divider()
+                Text("Custom Shortcut…").tag(customActionTag)
             }
-            .labelsHidden()
+            .labelsHidden().frame(width: 150)
+            if case .keyCombo = m.action {
+                ShortcutRecorderView(combo: comboBinding(i))
+                    .frame(width: 130)
+            }
             Button("−") { config.mappings.remove(at: i) }
                 .buttonStyle(.borderless).foregroundStyle(.red)
         }
+    }
+
+    private let customActionTag = "__custom__"
+
+    private func actionKindBinding(_ i: Int) -> Binding<String> {
+        Binding(
+            get: {
+                switch config.mappings[i].action {
+                case .system(let name): return name
+                case .keyCombo: return customActionTag
+                }
+            },
+            set: { newValue in
+                if newValue == customActionTag {
+                    if case .keyCombo = config.mappings[i].action { return }
+                    config.mappings[i].action = .keyCombo(KeyCombo(keyCode: 0x7E, modifiers: ["control"]))
+                } else {
+                    config.mappings[i].action = .system(newValue)
+                }
+            }
+        )
+    }
+
+    private func comboBinding(_ i: Int) -> Binding<KeyCombo> {
+        Binding(
+            get: {
+                if case .keyCombo(let combo) = config.mappings[i].action { return combo }
+                return KeyCombo(keyCode: 0x7E, modifiers: ["control"])
+            },
+            set: { config.mappings[i].action = .keyCombo($0) }
+        )
     }
 
     private func save() {
