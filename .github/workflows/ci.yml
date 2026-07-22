@@ -19,6 +19,8 @@ jobs:
         run: swift --version
       - name: Build (${{ matrix.config }})
         run: swift build -c ${{ matrix.config }}
+        env:
+          BUILD_DAEMON: ${{ matrix.config == 'release' && '1' || '' }}
       - name: Validate (${{ matrix.config }})
         if: matrix.config == 'release'
         run: $(swift build -c release --show-bin-path)/MouseFix --validate
